@@ -21,6 +21,8 @@ def api(monkeypatch):
     monkeypatch.setenv("KWATER_QUALITY_URL", url)
     monkeypatch.delenv("ALERT_WEBHOOK_URL", raising=False)
     monkeypatch.setenv("KWATER_RETRIES", "1")                                    # 시험은 재시도 없이 빨리
+    monkeypatch.setenv("AQUAFLOW_LEVEL", "0")                                    # 수위는 따로 시험 (아래)
+    monkeypatch.setenv("KWATER_LEVEL_URL", url.replace("waterQuality", "waterLevel"))
     yield
     srv.shutdown()
 
@@ -64,6 +66,27 @@ def test_paging(api, tmp_path, monkeypatch):
     monkeypatch.setattr(ingest, "fetch_api", lambda *a, **k: real(*a, **{**k, "rows": 5}))
     s = collect.run_once(tmp_path, hours=6, now=datetime(2026, 11, 22, 10))
     assert s["fetched"] == 14 and len(fake_api.Handler.calls) == 3               # 5 + 5 + 4
+
+
+def test_level_collected_per_tank(api, tmp_path, monkeypatch):
+    """수위: 탱크(태그)마다 시계열. T1 09시 4.5→7.5→4.5 m 급변 두 번 알림, T2 는 조용."""
+    monkeypatch.setenv("AQUAFLOW_LEVEL", "1")
+    s = collect.run_once(tmp_path, hours=6, now=datetime(2026, 11, 22, 10))
+    lv = s["level"]
+    assert lv["kept"] == 14 and lv["tanks"] == 2 and lv["kinds"] == {"배수지": 14} and lv["new_alerts"] == 2
+    s2 = collect.run_once(tmp_path, hours=6, now=datetime(2026, 11, 22, 12))
+    assert s2["level"]["new_alerts"] == 0
+    from aquaflow import level
+    import pyarrow.orc as orc
+    t = orc.read_table(str(tmp_path / "curated_level" / "date=2026-11-22" / "part-0.orc")).to_pylist()
+    assert len(t) == 18 and {r["tag"] for r in t} == {"T1", "T2"}          # 04~12시 × 2탱크, 겹침 중복 없음
+
+
+def test_level_failure_does_not_stop_quality(api, tmp_path, monkeypatch):
+    monkeypatch.setenv("AQUAFLOW_LEVEL", "1")
+    monkeypatch.setenv("KWATER_LEVEL_URL", "http://127.0.0.1:9/closed")
+    s = collect.run_once(tmp_path, hours=6, now=datetime(2026, 11, 22, 10))
+    assert s["ok"] and s["kept"] == 14 and s["level"]["ok"] is False and "fake-key" not in s["level"]["error"]
 
 
 def test_empty_body_shrinks_page_size(api, tmp_path, monkeypatch):

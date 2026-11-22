@@ -94,11 +94,34 @@ def run_once(out_dir, hours: int = 6, upload: bool = False, plant: str | None = 
     for r in alerts:
         notify(f"수질 표시 {r['plant_name']}({r['use_kind'] or '-'}) {r['ts']:%m-%d %H시} — {r['flags']} "
                f"(pH {r['ph']} · 탁도 {r['turbidity_ntu']} NTU · 잔류염소 {r['chlorine_mgl']} mg/L)")
-    keys = store.upload_s3(paths, out_dir) if upload and paths else []
     summary = {"at": now, "window": f"{st_d} {st_h}시 ~ {ed_d} {ed_h}시", "fetched": len(rows),
                "kept": report["kept_rows"], "rejected": report["rejected_rows"],
-               "reject_reasons": report["reject_reasons"], "new_alerts": len(alerts),
-               "orc_files": len(paths), "uploaded": len(keys), "ok": True}
+               "reject_reasons": report["reject_reasons"], "new_alerts": len(alerts), "orc_files": len(paths)}
+
+    # 수위 — 실패해도 수질 결과는 남긴다 (서비스 · 활용 신청이 따로라 한쪽만 막힐 수 있다)
+    if os.environ.get("AQUAFLOW_LEVEL", "1") == "1":
+        from . import level
+        try:
+            lrows = level.fetch(st_d, ed_d, st_h, ed_h)
+            lkept, lrej, lrep = level.check(lrows, now)
+            lpaths = level.write(lkept, out_dir)
+            if lrej:
+                (Path(out_dir) / "quarantine").mkdir(parents=True, exist_ok=True)
+                with (Path(out_dir) / "quarantine" / "rejected_level.jsonl").open("a", encoding="utf-8") as f:
+                    for r in lrej:
+                        f.write(json.dumps(r, ensure_ascii=False, default=str) + "\n")
+            lalerts = new_alerts([{**r, "plant_code": r["tag"], "plant_name": r["tank"], "use_kind": "수위"} for r in lkept],
+                                 out_dir, now)
+            for r in lalerts:
+                notify(f"수위 급변 {r['facility_name']} · {r['tank']} {r['ts']:%m-%d %H시} — {r['level_m']} m")
+            paths += lpaths
+            summary["level"] = {"fetched": len(lrows), "kept": lrep["kept_rows"], "rejected": lrep["rejected_rows"],
+                                "tanks": lrep["tanks"], "kinds": lrep["kinds"], "new_alerts": len(lalerts)}
+        except Exception as e:
+            summary["level"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    keys = store.upload_s3(paths, out_dir) if upload and paths else []
+    summary.update({"uploaded": len(keys), "ok": True})
     _log_run(out_dir, summary)
     return summary
 

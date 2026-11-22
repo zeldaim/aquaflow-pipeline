@@ -39,6 +39,16 @@ class Handler(BaseHTTPRequestHandler):
             return
         if q.get("serviceKey", [""])[0] != "fake-key":
             body = {"response": {"header": {"resultCode": "30", "resultMsg": "SERVICE_KEY_IS_NOT_REGISTERED_ERROR"}}}
+        elif "waterLevel" in self.path:
+            # 수위: 가짜배수지 탱크 2개 (태그 T1 · T2). SPIKE_AT 에 T1 이 3m 뛴다
+            items = []
+            for t in _hours(q):
+                for tag, tank in (("T1", "가짜배수지#1 수위"), ("T2", "가짜배수지#2 수위")):
+                    v = 7.5 if (tag == "T1" and t == SPIKE_AT) else 4.5
+                    items.append({"occrrncDt": int(t.strftime("%Y%m%d%H")), "fcltyNm": "가짜배수지(합성)",
+                                  "fcltyMngNo": 9999000001, "dataItemDesc": tank, "dataItemTagsn": tag,
+                                  "dataVal": v, "itemUnit": "m", "dataItemDiv": "M"})
+            body = {"response": {"header": {"resultCode": "00"}, "body": {"items": {"item": items}}}}
         else:
             items = []
             for t in _hours(q):

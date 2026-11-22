@@ -32,15 +32,18 @@ def _key(r: dict) -> tuple:
     return (r.get("plant_code") or r.get("plant_name") or "", r.get("use_kind") or "", r["ts"])
 
 
-def write_orc(kept: list[dict], out_dir: str | Path) -> list[Path]:
-    """out_dir/curated/date=YYYY-MM-DD/part-0.orc — 그 날짜 파일이 있으면 **합친다**.
-    같은 시설 · 시각은 새로 온 행이 이긴다 (API 가 값을 고쳐 보내는 경우). 그래서 매시간 겹쳐 받아도 중복이 없다."""
+def write_orc(kept: list[dict], out_dir: str | Path, schema: pa.Schema = SCHEMA, subdir: str = "curated",
+              key=_key) -> list[Path]:
+    """out_dir/<subdir>/date=YYYY-MM-DD/part-0.orc — 그 날짜 파일이 있으면 **합친다**.
+    같은 시설 · 시각은 새로 온 행이 이긴다 (API 가 값을 고쳐 보내는 경우). 그래서 매시간 겹쳐 받아도 중복이 없다.
+    수질은 기본값(curated), 수위는 level.py 가 자기 스키마 · 키 · 폴더(curated_level)로 부른다."""
+    _key = key
     by_day = defaultdict(list)
     for r in kept:
         by_day[r["ts"].date().isoformat()].append(r)
     paths = []
     for day, rows in sorted(by_day.items()):
-        d = Path(out_dir) / "curated" / f"date={day}"
+        d = Path(out_dir) / subdir / f"date={day}"
         d.mkdir(parents=True, exist_ok=True)
         p = d / "part-0.orc"
         merged = {}
@@ -51,7 +54,7 @@ def write_orc(kept: list[dict], out_dir: str | Path) -> list[Path]:
             merged[_key(r)] = r
         out = sorted(merged.values(), key=_key)
         tmp = d / "part-0.orc.tmp"                          # 쓰다 죽어도 기존 파일이 깨지지 않게
-        orc.write_table(_table(out, SCHEMA), str(tmp))
+        orc.write_table(_table(out, schema), str(tmp))
         tmp.replace(p)
         paths.append(p)
     return paths

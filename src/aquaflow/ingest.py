@@ -171,8 +171,13 @@ def _get(url: str, params: dict, key: str) -> bytes:
         except (requests.Timeout, requests.ConnectionError) as e:   # 일시적 — 잠깐 쉬고 다시
             last = e
             time.sleep(5 * (i + 1))
-        except requests.HTTPError as e:                               # 4xx · 5xx — 다시 해도 같음
-            body = e.response.text[:300] if e.response is not None else ""
+        except requests.HTTPError as e:
+            code = e.response.status_code if e.response is not None else 0
+            if code in (502, 503, 504):                               # 게이트웨이 일시 오류 (실측: 504 SERVICETIMEOUT) — 다시
+                last = e
+                time.sleep(10 * (i + 1))
+                continue
+            body = e.response.text[:300] if e.response is not None else ""   # 4xx 등 — 다시 해도 같음
             raise RuntimeError(f"API HTTP {e.response.status_code if e.response is not None else '?'}: {body}".replace(key, "***")) from None
     raise RuntimeError(f"API 응답 없음 ({tries}번 시도, 한 번에 {timeout:.0f}초): {type(last).__name__}".replace(key, "***"))
 

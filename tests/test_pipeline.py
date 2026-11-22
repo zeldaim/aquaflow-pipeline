@@ -3,7 +3,7 @@
 fixture 의 일부러 넣은 문제:
   A 02시 탁도 0.8   → 기준 초과 · 급변 표시 (저장은 함)
   A 03시 잔류염소 0.79→1.60 · 탁도 되돌아옴 → 급변 표시
-  A 03시 두 번       → 중복 격리
+  A 03시 값이 다른 두 번 → 충돌 중복 격리 · A 01시 값까지 같은 두 번 → 조용히 하나만 (API 넘김 겹침)
   A 04시 pH 15.2     → 불가능 값 격리
   A 24시             → 다음 날 00시로
   B 01시 값 전부 비어 있음 → 격리
@@ -35,7 +35,7 @@ def test_parse_ts_hour_24_is_next_day():
 
 
 def test_read_csv_maps_korean_header(rows):
-    assert len(rows) == 10
+    assert len(rows) == 11
     r = rows[0]
     assert r["plant_code"] == "TEST000001" and r["ph"] == 7.10 and r["chlorine_mgl"] == 0.80
     assert r["source"] == "csv:synthetic_quality.csv"
@@ -44,7 +44,7 @@ def test_read_csv_maps_korean_header(rows):
 def test_read_csv_cp949(tmp_path):
     p = tmp_path / "cp949.csv"
     p.write_bytes(FIXTURE.read_text(encoding="utf-8").encode("cp949"))
-    assert len(ingest.read_csv(p)) == 10
+    assert len(ingest.read_csv(p)) == 11
 
 
 def test_read_csv_real_export_format(tmp_path):
@@ -95,8 +95,8 @@ def test_read_csv_missing_column(tmp_path):
 def test_quality_split(rows):
     kept, rejected, report = quality.check(rows, now=NOW)
     assert report["rejected_rows"] == 4
-    assert report["reject_reasons"] == {"duplicate": 1, "ph_impossible": 1, "all_values_missing": 1, "ts_future": 1}
-    assert report["kept_rows"] == 6 and report["plants"] == 2
+    assert report["reject_reasons"] == {"duplicate_conflict": 1, "ph_impossible": 1, "all_values_missing": 1, "ts_future": 1}
+    assert report["kept_rows"] == 6 and report["plants"] == 2 and report["dedup_identical"] == 1
     flags = {(r["plant_code"], r["ts"].hour, r["ts"].day): r["flags"] for r in kept}
     # 02시 탁도 0.042→0.800: 기준 초과 + 급변, 03시 0.800→0.045 탁도 급변 + 잔류염소 0.79→1.60 급변
     assert flags[("TEST000001", 2, 18)] == "turbidity_ntu_over_standard,turbidity_ntu_jump"

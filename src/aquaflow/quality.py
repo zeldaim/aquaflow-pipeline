@@ -53,7 +53,8 @@ def check(rows: list[dict], now: datetime | None = None) -> tuple[list[dict], li
         from .ingest import now_kst
         now = now_kst()
     kept, rejected = [], []
-    seen = set()
+    seen = {}                       # 키 → 값. 값까지 같은 중복은 조용히 하나만 (API 넘김 겹침), 다르면 격리
+    identical = 0
     reasons = Counter()
     flags_count = Counter()
 
@@ -73,13 +74,17 @@ def check(rows: list[dict], now: datetime | None = None) -> tuple[list[dict], li
             if v is not None and not (lo <= v <= hi):
                 why.append(f"{k}_impossible")
         key = (*series_key(r), r["ts"])
+        vals = tuple(r[k] for k in PHYSICAL)
         if not why and key in seen:
-            why.append("duplicate")
+            if seen[key] == vals:
+                identical += 1
+                continue
+            why.append("duplicate_conflict")
         if why:
             reasons.update(why)
             rejected.append({**r, "reject_reasons": ",".join(why)})
             continue
-        seen.add(key)
+        seen[key] = vals
 
         flags = []
         for k, (lo, hi) in (THRESHOLDS.items() if is_drinking(r) else ()):
@@ -110,6 +115,7 @@ def check(rows: list[dict], now: datetime | None = None) -> tuple[list[dict], li
         "input_rows": len(rows),
         "kept_rows": len(kept),
         "rejected_rows": len(rejected),
+        "dedup_identical": identical,
         "reject_reasons": dict(reasons),
         "flags": dict(flags_count),
         "plants": len({r["plant_code"] or r["plant_name"] for r in kept}),
