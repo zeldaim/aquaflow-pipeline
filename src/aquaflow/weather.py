@@ -71,8 +71,8 @@ SCHEMA = pa.schema([
     ("ts", pa.timestamp("s")),
     ("stn_id", pa.int32()),
     ("stn_name", pa.string()),
-    ("rain_mm", pa.float64()),        # None = 응답에 값 없음 (무강수인지 결측인지는 rain_raw 로)
-    ("rain_raw", pa.string()),        # 응답 원래 값 그대로 (빈 문자열 · 0 · 숫자 — 의미 확인 전이라 남겨 둔다)
+    ("rain_mm", pa.float64()),        # 빈 값(무강수) = 0.0
+    ("rain_raw", pa.string()),        # 응답 원래 값 그대로 (빈 문자열 · 숫자)
     ("rain_qc", pa.string()),         # rnQcflag (품질검사 플래그)
     ("source", pa.string()),
     ("flags", pa.string()),
@@ -101,8 +101,11 @@ def fetch_day(stn_id: int, day: date, rows: int = 50) -> list[dict]:
     out = []
     for it in ingest._items_from_response(body):
         raw = ingest._text(it.get("rn"))
+        # 빈 값 = 무강수 (2026-11-22 실측: 30개 지점 이틀치 1440행에서 비 온 시간만 숫자, 나머지는 전부 빈 값,
+        # '0' 은 한 번도 안 나옴). 원래 값은 rain_raw 에 그대로 남긴다
+        rain = ingest.to_float(raw) if raw else 0.0
         out.append({"ts": ingest.parse_ts(it.get("tm")), "stn_id": int(it.get("stnId") or stn_id),
-                    "stn_name": ingest._text(it.get("stnNm")), "rain_mm": ingest.to_float(raw), "rain_raw": raw,
+                    "stn_name": ingest._text(it.get("stnNm")), "rain_mm": rain, "rain_raw": raw,
                     "rain_qc": ingest._text(it.get("rnQcflag")), "source": "kma_asos", "flags": ""})
     return out
 
