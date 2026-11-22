@@ -26,15 +26,23 @@ ORDER BY flagged_hours DESC, plant_name
 """
 
 
-def load(out_dir: str | Path) -> pa.Table:
-    files = sorted((Path(out_dir) / "curated").glob("date=*/part-0.orc"))
+TABLES = {"wq": "curated", "lv": "curated_level", "wx": "curated_weather"}   # 수질 · 수위 · 강수량
+
+
+def load(out_dir: str | Path, subdir: str = "curated") -> pa.Table | None:
+    files = sorted((Path(out_dir) / subdir).glob("date=*/part-0.orc"))
     if not files:
-        raise FileNotFoundError(f"{out_dir}/curated 에 ORC 가 없음 — 먼저 ingest")
+        return None
     return pa.concat_tables([orc.read_table(str(f)) for f in files])
 
 
 def run(out_dir: str | Path, sql: str = SUMMARY_SQL):
-    wq = load(out_dir)                                   # noqa: F841 — DuckDB 가 이름(wq)으로 찾는다
+    """테이블: wq(수질) · lv(수위) · wx(강수량) — 있는 것만 등록. 예) 표시된 수질 시각의 그 지역 강수량 JOIN"""
     con = duckdb.connect()
-    con.register("wq", wq)
+    for name, sub in TABLES.items():
+        t = load(out_dir, sub)
+        if t is not None:
+            con.register(name, t)
+    if "wq" not in {r[0] for r in con.execute("SHOW TABLES").fetchall()}:
+        raise FileNotFoundError(f"{out_dir}/curated 에 ORC 가 없음 — 먼저 ingest")
     return con.execute(sql).fetchall(), [d[0] for d in con.description]

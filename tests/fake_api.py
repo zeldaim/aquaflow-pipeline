@@ -39,6 +39,15 @@ class Handler(BaseHTTPRequestHandler):
             return
         if q.get("serviceKey", [""])[0] != "fake-key":
             body = {"response": {"header": {"resultCode": "30", "resultMsg": "SERVICE_KEY_IS_NOT_REGISTERED_ERROR"}}}
+        elif "AsosHourly" in self.path:
+            # 기상청 ASOS: 요청 지점의 하루 24시간. 216(태백) 15시에 3.5mm, 나머지는 빈 값. 99 는 일부러 엉뚱한 이름
+            from aquaflow import weather
+            stn = int(q["stnIds"][0])
+            name = "엉뚱" if stn == 99 else next(n for s, n, _ in weather.STATIONS.values() if s == stn)
+            day = datetime.strptime(q["startDt"][0], "%Y%m%d")
+            items = [{"stnId": str(stn), "stnNm": name, "tm": (day + timedelta(hours=h)).strftime("%Y-%m-%d %H:%M"),
+                      "rn": "3.5" if (stn == 216 and h == 15) else "", "rnQcflag": ""} for h in range(24)]
+            body = {"response": {"header": {"resultCode": "00"}, "body": {"items": {"item": items}}}}
         elif "waterLevel" in self.path:
             # 수위: 가짜배수지 탱크 2개 (태그 T1 · T2). SPIKE_AT 에 T1 이 3m 뛴다
             items = []

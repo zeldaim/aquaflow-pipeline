@@ -120,6 +120,20 @@ def run_once(out_dir, hours: int = 6, upload: bool = False, plant: str | None = 
         except Exception as e:
             summary["level"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
+    # 강수량 — 기상청 ASOS 는 전날까지만 준다. 하루에 한 번 어제 것을 (실패하면 다음 주기에 다시)
+    if os.environ.get("AQUAFLOW_WEATHER", "1") == "1":
+        from . import weather
+        day = weather.due_day(out_dir, now.date())
+        if day:
+            try:
+                w = weather.collect_day(out_dir, day)
+                summary["weather"] = {k: w[k] for k in ("day", "ok_stations", "stations", "rows", "rain_hours")}
+                if w["station_mismatch"] or w["errors"]:
+                    summary["weather"]["problems"] = {"mismatch": w["station_mismatch"],
+                                                      "errors": dict(list(w["errors"].items())[:3])}
+            except Exception as e:
+                summary["weather"] = {"ok": False, "error": f"{type(e).__name__}: {e}"[:200]}
+
     keys = store.upload_s3(paths, out_dir) if upload and paths else []
     summary.update({"uploaded": len(keys), "ok": True})
     _log_run(out_dir, summary)

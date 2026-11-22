@@ -22,6 +22,8 @@ def api(monkeypatch):
     monkeypatch.delenv("ALERT_WEBHOOK_URL", raising=False)
     monkeypatch.setenv("KWATER_RETRIES", "1")                                    # 시험은 재시도 없이 빨리
     monkeypatch.setenv("AQUAFLOW_LEVEL", "0")                                    # 수위는 따로 시험 (아래)
+    monkeypatch.setenv("AQUAFLOW_WEATHER", "0")                                  # 강수량도 따로
+    monkeypatch.setenv("KMA_ASOS_URL", url.replace("waterQuality", "AsosHourlyInfoService/getWthrDataList"))
     monkeypatch.setenv("KWATER_LEVEL_URL", url.replace("waterQuality", "waterLevel"))
     yield
     srv.shutdown()
@@ -80,6 +82,22 @@ def test_level_collected_per_tank(api, tmp_path, monkeypatch):
     import pyarrow.orc as orc
     t = orc.read_table(str(tmp_path / "curated_level" / "date=2026-11-22" / "part-0.orc")).to_pylist()
     assert len(t) == 18 and {r["tag"] for r in t} == {"T1", "T2"}          # 04~12시 × 2탱크, 겹침 중복 없음
+
+
+def test_weather_daily_once_and_station_check(api, tmp_path, monkeypatch):
+    """강수량: 어제(D-1) 하루 · 지점명 확인(99 는 엉뚱한 이름 → 안 씀) · 하루에 한 번만 · 수질과 JOIN."""
+    from aquaflow import weather
+    monkeypatch.setenv("AQUAFLOW_WEATHER", "1")
+    s = collect.run_once(tmp_path, hours=6, now=datetime(2026, 11, 22, 10))
+    n_st = len({v[0] for v in weather.STATIONS.values()})
+    w = s["weather"]
+    assert w["day"] == "2026-11-21" and w["stations"] == n_st and w["ok_stations"] == n_st - 1
+    assert w["rows"] == (n_st - 1) * 24 and w["rain_hours"] == 1
+    assert w["problems"]["mismatch"] == {99: {"expected": "파주", "got": ["엉뚱"]}}
+    s2 = collect.run_once(tmp_path, hours=6, now=datetime(2026, 11, 22, 11))
+    assert "weather" not in s2                                                   # 어제 것은 이미 받음
+    rows, cols = query.run(tmp_path, "SELECT stn_name, rain_mm, rain_raw FROM wx WHERE rain_mm > 0")
+    assert rows == [("태백", 3.5, "3.5")]
 
 
 def test_level_failure_does_not_stop_quality(api, tmp_path, monkeypatch):

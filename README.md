@@ -24,9 +24,11 @@ Python, PyArrow, DuckDB, LocalStack (S3), boto3 — MinIO 는 2025년부터 커�
 | CSV 파일 | 「한국수자원공사_실시간 수도정보 수질(시간)」 파일데이터 (15055259) — 사이트에서 받아 `data/raw/` 에 | **필요 없음** |
 | Open API | 「한국수자원공사_실시간 수도정보 수질(시간) 조회 서비스」 (15057290, `B500001/rwis/waterQuality/list`) | 활용 신청 → `.env` 의 `KWATER_API_KEY` |
 | Open API | 「한국수자원공사_실시간 수도정보 **수위**(시간) 조회 서비스」 (15057371, `B500001/rwis/waterLevel/list`) — 정수지 · 배수지 탱크별 수위(m) | 같은 키, 이 서비스도 활용 신청 |
+| Open API | 「기상청_지상(종관, ASOS) **시간자료** 조회서비스」 (15057210, `1360000/AsosHourlyInfoService`) — 지점별 시간 강수량 | 같은 키, 이 서비스도 활용 신청 |
 
 - CSV 머리글이 예상과 다르면 어느 열이 없는지 알려 준다 → `src/aquaflow/ingest.py` 의 `CSV_ALIASES` 에 이름을 더한다. 인코딩은 UTF-8 · CP949 둘 다 받는다.
 - 두 API 모두 작업 경로는 `/list`, 날짜는 `YYYY-MM-DD` (수위 명세에는 `YYYYMMDD` 로 적혀 있지만 그렇게 보내면 60초 뒤 504) — 2026-11-22 실제 키로 확인. 바꿀 때는 `KWATER_QUALITY_URL` · `KWATER_LEVEL_URL`.
+- **강수량은 맥락용이다:** 수질 · 수위 표시가 났을 때 같은 시각 그 지역에 비가 왔는지 → 자연 원인(강우)인지 설비 · 조작 의심인지 가른다 (경보 보강). 기상청 ASOS 는 **전날(D-1)까지만** 줘서 **일일 보고서**용 — 하루에 한 번 어제 것을 받는다. 시설 ↔ 관측 지점은 행정구역 기준으로 손으로 정했고(`weather.STATIONS`, 거리 계산 아님), 지점 번호는 **API 응답의 지점명으로 확인**해 안 맞으면 쓰지 않는다. DuckDB 에서 `wq` · `lv` · `wx` 를 JOIN 한다.
 - 수위는 한 시설에 탱크가 여럿(배수지#1 · #2 …)이라 **탱크(`dataItemTagsn`)마다** 시계열 · `data/lake/curated_level/`. 수위 수집이 실패해도 수질 결과는 남는다 (`AQUAFLOW_LEVEL=0` 이면 끔).
 - 원본 데이터는 git 에 올리지 않는다 (`data/` 는 `.gitignore`).
 
@@ -75,7 +77,7 @@ docker compose --profile auto up -d collector              # 매시간 계속 (r
 
 ## 확인한 것 (2026-11-22)
 
-- 시험 20개 통과 — 합성 데이터(**실제 시설 아님**) `tests/fixtures/` 2개 · 가짜 API 서버 `tests/fake_api.py`
+- 시험 21개 통과 — 합성 데이터(**실제 시설 아님**) `tests/fixtures/` 2개 · 가짜 API 서버 `tests/fake_api.py`
   - 수집 · 검증 · ORC · DuckDB, 실제 파일 꼴(CP949 · 기준치 줄), 자동 수집(겹쳐 받아도 중복 없음 · 같은 알림 한 번 · 페이지 넘김 · 잘못된 키 3회 연속 실패 알림 · 키가 출력에 안 나옴)
 - 합성 데이터로 LocalStack 까지: 10행 → 격리 4 · 저장 6 → ORC 업로드 (S3 저장 시 암호화 `AES256` 확인) → DuckDB 요약
 - **실제 K-water 데이터 (CSV, 반월정수장 2026-11-22 01~16시 16행):** 격리 0 · 표시 0. pH 7.61~7.64 · 탁도 0.0559~0.0573 NTU · 잔류염소 0.77~0.93 mg/L
