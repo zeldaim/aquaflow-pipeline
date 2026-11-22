@@ -17,6 +17,9 @@ services:
     env_file: [.env]
     environment:
       S3_ENDPOINT: http://s3:4566
+      # 한 번에 받을 최근 시간. PC 가 절전하면 수집이 멈추므로 넉넉히 (12시간 안쪽 절전은 깨어난 뒤 첫 실행이 메움).
+      # 수위 API 가 느려서(5행 37초) 24 이상은 한 번에 수십 분 — .env 에 AQUAFLOW_HOURS=… 로 바꿈
+      AQUAFLOW_HOURS: ${AQUAFLOW_HOURS:-12}
     volumes:
       - ./data:/app/data
     depends_on: [s3]
@@ -26,11 +29,14 @@ services:
   collector:
     build: .
     profiles: ["auto"]
-    command: ["collect", "--every", "3600", "--hours", "6", "--upload"]
+    command: ["collect", "--every", "3600", "--upload"]
     restart: unless-stopped
     env_file: [.env]
     environment:
       S3_ENDPOINT: http://s3:4566
+      # 한 번에 받을 최근 시간. PC 가 절전하면 수집이 멈추므로 넉넉히 (12시간 안쪽 절전은 깨어난 뒤 첫 실행이 메움).
+      # 수위 API 가 느려서(5행 37초) 24 이상은 한 번에 수십 분 — .env 에 AQUAFLOW_HOURS=… 로 바꿈
+      AQUAFLOW_HOURS: ${AQUAFLOW_HOURS:-12}
     volumes:
       - ./data:/app/data
     depends_on: [s3]

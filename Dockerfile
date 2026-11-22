@@ -1,6 +1,7 @@
 # pyarrow 의 ORC 는 Windows 빌드에서 쓸 수 없는 경우가 있어 리눅스 컨테이너에서 돌린다
 FROM python:3.12-slim
 WORKDIR /app
+ENV PYTHONUNBUFFERED=1   # docker logs 에 실행 결과가 바로 보이게 (없으면 버퍼에 쌓여 끝나도 안 보임)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY src ./src

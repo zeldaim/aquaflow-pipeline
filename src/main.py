@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -55,6 +56,7 @@ def cmd_ingest(a) -> int:
 
 def cmd_collect(a) -> int:
     from aquaflow import collect
+    a.hours = a.hours or int(os.environ.get("AQUAFLOW_HOURS", "6"))   # 절전 · 장애로 빠진 시간을 다음 실행이 메우게
     if a.once:
         print(json.dumps(collect.run_once(a.out, a.hours, a.upload, a.plant), ensure_ascii=False, indent=2, default=str))
     else:
@@ -88,7 +90,8 @@ def main(argv=None) -> int:
     pc = sub.add_parser("collect", help="자동 수집 (Open API · KWATER_API_KEY 필요)")
     pc.add_argument("--once", action="store_true", help="한 번만 (없으면 --every 초마다 반복)")
     pc.add_argument("--every", type=int, default=3600, help="반복 주기(초), 기본 1시간")
-    pc.add_argument("--hours", type=int, default=6, help="한 번에 받을 최근 시간 (앞 주기와 겹치게)")
+    pc.add_argument("--hours", type=int, default=None,
+                    help="한 번에 받을 최근 시간 (앞 주기와 겹치게). 없으면 환경변수 AQUAFLOW_HOURS, 그것도 없으면 6")
     pc.add_argument("--plant", help="시설관리번호 (없으면 전체)")
     pc.add_argument("--upload", action="store_true", help="S3 호환 저장소에도 올림")
 

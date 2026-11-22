@@ -132,3 +132,18 @@ def test_key_never_printed(api, tmp_path, monkeypatch, capsys):
     collect.loop(tmp_path, every_s=0, hours=1, max_runs=1)
     out = capsys.readouterr().out + (tmp_path / "state" / "collect_runs.jsonl").read_text(encoding="utf-8")
     assert "fake-key" not in out
+
+
+def test_collect_hours_from_env(monkeypatch, tmp_path):
+    """--hours 가 없으면 AQUAFLOW_HOURS (절전으로 빠진 시간을 메우는 구간) — 반복 · 한 번 실행 둘 다. 명령줄이 이긴다."""
+    import main as cli
+    seen = []
+    monkeypatch.setattr(collect, "run_once", lambda out, hours, *a, **k: seen.append(("once", hours)) or {})
+    monkeypatch.setattr(collect, "loop", lambda out, every, hours, *a, **k: seen.append(("loop", hours)))
+    monkeypatch.setenv("AQUAFLOW_HOURS", "12")
+    cli.main(["--out", str(tmp_path), "collect", "--once"])
+    cli.main(["--out", str(tmp_path), "collect"])
+    cli.main(["--out", str(tmp_path), "collect", "--once", "--hours", "3"])
+    monkeypatch.delenv("AQUAFLOW_HOURS")
+    cli.main(["--out", str(tmp_path), "collect", "--once"])
+    assert seen == [("once", 12), ("loop", 12), ("once", 3), ("once", 6)]
