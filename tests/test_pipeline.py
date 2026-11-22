@@ -62,6 +62,29 @@ def test_read_csv_real_export_format(tmp_path):
     assert flags[3] == "chlorine_mgl_jump"
 
 
+def test_same_plant_two_use_kinds_and_industrial_standards():
+    """실제 API 에서 본 꼴: 한 시설관리번호가 같은 시각에 생활정수 · 공업용수를 따로 낸다 (값은 합성).
+    둘 다 남아야 하고, 공업용수의 낮은 잔류염소는 먹는물 기준 표시를 하지 않는다."""
+    t = datetime(2026, 11, 22, 16)
+    base = {"ts": t, "plant_name": "테스트정수장D(합성)", "plant_code": "TEST000004", "source": "api"}
+    rows = [{**base, "use_kind": "생활정수", "ph": 7.7, "turbidity_ntu": 0.04, "chlorine_mgl": 0.86},
+            {**base, "use_kind": "공업용수", "ph": 7.7, "turbidity_ntu": 0.80, "chlorine_mgl": 0.03}]
+    kept, rejected, report = quality.check(rows, now=NOW.replace(day=22, hour=18))
+    assert report["rejected_rows"] == 0 and report["kept_rows"] == 2 and report["series"] == 2
+    assert [r["flags"] for r in kept] == ["", ""]              # 공업용수 탁도 0.8 · 잔류염소 0.03 도 표시 없음
+
+
+def test_store_keeps_both_use_kinds(tmp_path):
+    t = datetime(2026, 11, 22, 16)
+    base = {"ts": t, "plant_name": "테스트정수장D(합성)", "plant_code": "TEST000004", "source": "api", "flags": "",
+            "ph": 7.7, "turbidity_ntu": 0.1, "chlorine_mgl": 0.5}
+    store.write_orc([{**base, "use_kind": "생활정수"}], tmp_path)
+    store.write_orc([{**base, "use_kind": "공업용수"}], tmp_path)                # 다른 구분 → 덮지 않고 더함
+    store.write_orc([{**base, "use_kind": "공업용수", "ph": 7.9}], tmp_path)    # 같은 구분 → 새 값으로 교체
+    result, cols = query.run(tmp_path, "SELECT use_kind, ph FROM wq ORDER BY use_kind")
+    assert result == [("공업용수", 7.9), ("생활정수", 7.7)]
+
+
 def test_read_csv_missing_column(tmp_path):
     p = tmp_path / "bad.csv"
     p.write_text("시설명,pH\n가,7\n", encoding="utf-8")

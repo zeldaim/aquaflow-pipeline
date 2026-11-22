@@ -19,6 +19,7 @@ from __future__ import annotations
 import csv
 import io
 import os
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -47,7 +48,7 @@ API_FIELDS = {
 
 def parse_ts(value: str) -> datetime | None:
     """'2015111824'(YYYYMMDDHH, 24시 = 다음 날 0시) · '2026-04-28 13:00' 등 여러 꼴을 받는다."""
-    s = (value or "").strip()
+    s = _text(value)                                        # API 는 2026112210 처럼 숫자로 줄 때가 있다
     if not s:
         return None
     digits = "".join(ch for ch in s if ch.isdigit())
@@ -83,12 +84,17 @@ def _decode(raw: bytes) -> str:
     raise ValueError("CSV 인코딩을 알 수 없음 (UTF-8 · CP949 둘 다 아님)")
 
 
+def _text(value) -> str:
+    """문자열 · 숫자 · None 모두 문자열로 (API JSON 은 시설관리번호 · 시각을 숫자로 준다)."""
+    return "" if value is None else str(value).strip()
+
+
 def _standard(raw: dict, source: str) -> dict:
     return {
-        "ts": parse_ts(raw.get("ts", "")),
-        "plant_name": (raw.get("plant_name") or "").strip(),
-        "plant_code": (raw.get("plant_code") or "").strip(),
-        "use_kind": (raw.get("use_kind") or "").strip(),
+        "ts": parse_ts(raw.get("ts")),
+        "plant_name": _text(raw.get("plant_name")),
+        "plant_code": _text(raw.get("plant_code")),
+        "use_kind": _text(raw.get("use_kind")),
         "ph": to_float(raw.get("ph")),
         "turbidity_ntu": to_float(raw.get("turbidity_ntu")),
         "chlorine_mgl": to_float(raw.get("chlorine_mgl")),
@@ -149,15 +155,35 @@ def _items_from_response(body: bytes) -> list[dict]:
 MAX_PAGES = 200                                             # API 가 pageNo 를 무시해도 끝없이 돌지 않게
 
 
-def fetch_api(st_date: str, ed_date: str, plant_code: str | None = None, rows: int = 1000,
-              st_hour: str = "00", ed_hour: str = "24") -> list[dict]:
-    """시작 · 끝 날짜(YYYY-MM-DD) · 시각(00~24) 사이 1시간 수질. 쪽(page)을 끝까지 돈다."""
+def _get(url: str, params: dict, key: str) -> bytes:
+    """GET + 재시도. data.go.kr 은 느리다 (2026-11-22 실측: 2행에 12초, 1000행 요청은 30초 넘게).
+    오류 메시지에는 요청 주소(=키 포함)가 들어가므로 키를 가린 RuntimeError 로 바꿔 올린다."""
     import requests
 
+    timeout = float(os.environ.get("KWATER_TIMEOUT", "120"))
+    tries = int(os.environ.get("KWATER_RETRIES", "3"))
+    last = None
+    for i in range(tries):
+        try:
+            resp = requests.get(url, params=params, timeout=timeout)
+            resp.raise_for_status()
+            return resp.content
+        except (requests.Timeout, requests.ConnectionError) as e:   # 일시적 — 잠깐 쉬고 다시
+            last = e
+            time.sleep(5 * (i + 1))
+        except requests.HTTPError as e:                               # 4xx · 5xx — 다시 해도 같음
+            body = e.response.text[:300] if e.response is not None else ""
+            raise RuntimeError(f"API HTTP {e.response.status_code if e.response is not None else '?'}: {body}".replace(key, "***")) from None
+    raise RuntimeError(f"API 응답 없음 ({tries}번 시도, 한 번에 {timeout:.0f}초): {type(last).__name__}".replace(key, "***"))
+
+
+def fetch_api(st_date: str, ed_date: str, plant_code: str | None = None, rows: int = 300,
+              st_hour: str = "00", ed_hour: str = "24") -> list[dict]:
+    """시작 · 끝 날짜(YYYY-MM-DD) · 시각(00~24) 사이 1시간 수질. 쪽(page)을 끝까지 돈다.
+    작업 경로 `/list` 는 2026-11-22 실제 키로 확인 (기본 주소 · 다른 이름은 NO_OPENAPI_SERVICE_ERROR)."""
     key = os.environ.get("KWATER_API_KEY")
     if not key:
         raise RuntimeError("KWATER_API_KEY 가 없음 — .env 에 넣는다 (.env.example 참고). 키 없이 하려면 CSV 경로를 쓴다")
-    # 명세 페이지에는 기본 주소만 나와 있어 작업별 경로는 확인이 필요하다 — 바꿀 수 있게 환경 변수로 둔다
     url = os.environ.get("KWATER_QUALITY_URL", "https://apis.data.go.kr/B500001/rwis/waterQuality/list")
     out, page = [], 1
     while True:
@@ -165,9 +191,7 @@ def fetch_api(st_date: str, ed_date: str, plant_code: str | None = None, rows: i
                   "numOfRows": rows, "pageNo": page, "_type": "json"}
         if plant_code:
             params["fcltyMngNo"] = plant_code
-        resp = requests.get(url, params=params, timeout=30)
-        resp.raise_for_status()
-        items = _items_from_response(resp.content)
+        items = _items_from_response(_get(url, params, key))
         out += [_standard({API_FIELDS[k]: v for k, v in it.items() if k in API_FIELDS}, "api") for it in items]
         if len(items) < rows:
             return out

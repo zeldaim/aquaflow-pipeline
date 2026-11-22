@@ -66,7 +66,7 @@ def new_alerts(kept: list[dict], out_dir, now: datetime) -> list[dict]:
     for r in kept:
         if not r["flags"]:
             continue
-        key = f"{r['plant_code'] or r['plant_name']}|{r['ts'].isoformat()}|{r['flags']}"
+        key = f"{r['plant_code'] or r['plant_name']}|{r['use_kind']}|{r['ts'].isoformat()}|{r['flags']}"
         if key in sent:
             continue
         sent[key] = now.isoformat()
@@ -92,7 +92,7 @@ def run_once(out_dir, hours: int = 6, upload: bool = False, plant: str | None = 
     store.write_rejected(rejected, out_dir, append=True)
     alerts = new_alerts(kept, out_dir, now)
     for r in alerts:
-        notify(f"수질 표시 {r['plant_name']} {r['ts']:%m-%d %H시} — {r['flags']} "
+        notify(f"수질 표시 {r['plant_name']}({r['use_kind'] or '-'}) {r['ts']:%m-%d %H시} — {r['flags']} "
                f"(pH {r['ph']} · 탁도 {r['turbidity_ntu']} NTU · 잔류염소 {r['chlorine_mgl']} mg/L)")
     keys = store.upload_s3(paths, out_dir) if upload and paths else []
     summary = {"at": now, "window": f"{st_d} {st_h}시 ~ {ed_d} {ed_h}시", "fetched": len(rows),

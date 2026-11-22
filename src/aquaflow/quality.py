@@ -34,6 +34,19 @@ MAX_HOURLY_JUMP = {"ph": 1.0, "turbidity_ntu": 0.3, "chlorine_mgl": 0.5}
 FUTURE_SLACK = timedelta(hours=2)
 
 
+def series_key(r: dict) -> tuple:
+    """한 시계열 = 시설 × 용수 구분. 한 정수장이 생활정수 · 공업용수를 같은 시설관리번호로 따로 낸다
+    (2026-11-22 실제 API: 시흥 · 청주 · 천안 · 아산 …) — 구분을 빼면 한쪽을 '중복'으로 버리게 된다."""
+    return (r["plant_code"] or r["plant_name"], r["use_kind"])
+
+
+def is_drinking(r: dict) -> bool:
+    """먹는물 기준(THRESHOLDS)은 생활용수에만. 공업용수는 먹는물이 아니라 기준이 다르다 — 물리 범위 · 급변만 본다.
+    구분이 비어 있으면(예전 파일) 생활로 본다."""
+    kind = r["use_kind"]
+    return not kind or kind.startswith("생활")
+
+
 def check(rows: list[dict], now: datetime | None = None) -> tuple[list[dict], list[dict], dict]:
     """(통과한 행 · 격리된 행 · 보고서). 통과한 행에는 flags(쉼표 문자열)가 붙는다."""
     if now is None:                                         # 데이터가 한국 시간이라 기준도 한국 시간 (컨테이너는 UTC)
@@ -59,7 +72,7 @@ def check(rows: list[dict], now: datetime | None = None) -> tuple[list[dict], li
             v = r[k]
             if v is not None and not (lo <= v <= hi):
                 why.append(f"{k}_impossible")
-        key = (r["plant_code"] or r["plant_name"], r["ts"])
+        key = (*series_key(r), r["ts"])
         if not why and key in seen:
             why.append("duplicate")
         if why:
@@ -69,7 +82,7 @@ def check(rows: list[dict], now: datetime | None = None) -> tuple[list[dict], li
         seen.add(key)
 
         flags = []
-        for k, (lo, hi) in THRESHOLDS.items():
+        for k, (lo, hi) in (THRESHOLDS.items() if is_drinking(r) else ()):
             v = r[k]
             if v is None:
                 continue
@@ -80,10 +93,10 @@ def check(rows: list[dict], now: datetime | None = None) -> tuple[list[dict], li
         kept.append({**r, "flags": flags})
 
     # 시간당 급변 — 같은 시설의 이웃한 시각끼리 비교
-    kept.sort(key=lambda r: (r["plant_code"] or r["plant_name"], r["ts"]))
+    kept.sort(key=lambda r: (*series_key(r), r["ts"]))
     prev = None
     for r in kept:
-        same = prev is not None and (prev["plant_code"] or prev["plant_name"]) == (r["plant_code"] or r["plant_name"])
+        same = prev is not None and series_key(prev) == series_key(r)
         if same and r["ts"] - prev["ts"] == timedelta(hours=1):
             for k, limit in MAX_HOURLY_JUMP.items():
                 if r[k] is not None and prev[k] is not None and abs(r[k] - prev[k]) > limit:
@@ -100,6 +113,7 @@ def check(rows: list[dict], now: datetime | None = None) -> tuple[list[dict], li
         "reject_reasons": dict(reasons),
         "flags": dict(flags_count),
         "plants": len({r["plant_code"] or r["plant_name"] for r in kept}),
+        "series": len({series_key(r) for r in kept}),          # 시설 × 용수 구분
         "ts_min": min((r["ts"] for r in kept), default=None),
         "ts_max": max((r["ts"] for r in kept), default=None),
     }

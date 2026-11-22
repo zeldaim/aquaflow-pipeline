@@ -28,7 +28,8 @@ def _table(rows: list[dict], schema: pa.Schema) -> pa.Table:
 
 
 def _key(r: dict) -> tuple:
-    return (r.get("plant_code") or r.get("plant_name"), r["ts"])
+    """시설 × 용수 구분 × 시각 (quality.series_key 와 같은 기준 — 생활 · 공업을 따로)."""
+    return (r.get("plant_code") or r.get("plant_name") or "", r.get("use_kind") or "", r["ts"])
 
 
 def write_orc(kept: list[dict], out_dir: str | Path) -> list[Path]:
@@ -48,7 +49,7 @@ def write_orc(kept: list[dict], out_dir: str | Path) -> list[Path]:
                 merged[_key(old)] = old
         for r in rows:
             merged[_key(r)] = r
-        out = sorted(merged.values(), key=lambda r: (_key(r)[0] or "", r["ts"]))
+        out = sorted(merged.values(), key=_key)
         tmp = d / "part-0.orc.tmp"                          # 쓰다 죽어도 기존 파일이 깨지지 않게
         orc.write_table(_table(out, SCHEMA), str(tmp))
         tmp.replace(p)

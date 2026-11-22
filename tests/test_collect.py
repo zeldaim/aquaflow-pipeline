@@ -20,8 +20,16 @@ def api(monkeypatch):
     monkeypatch.setenv("KWATER_API_KEY", "fake-key")
     monkeypatch.setenv("KWATER_QUALITY_URL", url)
     monkeypatch.delenv("ALERT_WEBHOOK_URL", raising=False)
+    monkeypatch.setenv("KWATER_RETRIES", "1")                                    # 시험은 재시도 없이 빨리
     yield
     srv.shutdown()
+
+
+def test_numeric_json_fields():
+    """실제 API 는 시설관리번호 · 시각 · 값을 숫자로 준다 (2026-11-22 확인)."""
+    r = ingest._standard({"ts": 2026112210, "plant_code": 3171012336, "plant_name": "x", "ph": 7.1,
+                          "turbidity_ntu": 0.05, "chlorine_mgl": 0.0451}, "api")
+    assert r["ts"] == datetime(2026, 11, 22, 10) and r["plant_code"] == "3171012336" and r["chlorine_mgl"] == 0.0451
 
 
 def test_window_crosses_midnight():
@@ -45,7 +53,7 @@ def test_overlapping_runs_no_duplicates_and_alert_once(api, tmp_path, capsys):
     assert sum(r[cols.index("hours")] for r in rows) == 18                       # 04~12시 9시각 × 2곳, 겹침 중복 없음
     runs = (tmp_path / "state" / "collect_runs.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(runs) == 2 and all(json.loads(l)["ok"] for l in runs)
-    assert "[알림] 수질 표시 가짜정수장A(합성) 11-22 09시" in capsys.readouterr().out
+    assert "[알림] 수질 표시 가짜정수장A(합성)(-) 11-22 09시" in capsys.readouterr().out
 
     call = fake_api.Handler.calls[0]
     assert (call["stDt"], call["stTm"], call["edDt"], call["edTm"]) == ("2026-11-22", "04", "2026-11-22", "10")
