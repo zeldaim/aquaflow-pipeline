@@ -27,10 +27,16 @@ def _hours(q) -> list[datetime]:
 
 class Handler(BaseHTTPRequestHandler):
     calls: list[dict] = []
+    empty_above: int | None = None    # 쪽 크기가 이보다 크면 HTTP 200 · 빈 본문 (실제 API 에서 본 동작)
 
     def do_GET(self):  # noqa: N802
         q = parse_qs(urlparse(self.path).query)
         Handler.calls.append({k: v[0] for k, v in q.items()})
+        if Handler.empty_above is not None and int(q.get("numOfRows", ["0"])[0]) > Handler.empty_above:
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if q.get("serviceKey", [""])[0] != "fake-key":
             body = {"response": {"header": {"resultCode": "30", "resultMsg": "SERVICE_KEY_IS_NOT_REGISTERED_ERROR"}}}
         else:

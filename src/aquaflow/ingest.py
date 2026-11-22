@@ -177,7 +177,7 @@ def _get(url: str, params: dict, key: str) -> bytes:
     raise RuntimeError(f"API 응답 없음 ({tries}번 시도, 한 번에 {timeout:.0f}초): {type(last).__name__}".replace(key, "***"))
 
 
-def fetch_api(st_date: str, ed_date: str, plant_code: str | None = None, rows: int = 300,
+def fetch_api(st_date: str, ed_date: str, plant_code: str | None = None, rows: int = 100,
               st_hour: str = "00", ed_hour: str = "24") -> list[dict]:
     """시작 · 끝 날짜(YYYY-MM-DD) · 시각(00~24) 사이 1시간 수질. 쪽(page)을 끝까지 돈다.
     작업 경로 `/list` 는 2026-11-22 실제 키로 확인 (기본 주소 · 다른 이름은 NO_OPENAPI_SERVICE_ERROR)."""
@@ -191,7 +191,16 @@ def fetch_api(st_date: str, ed_date: str, plant_code: str | None = None, rows: i
                   "numOfRows": rows, "pageNo": page, "_type": "json"}
         if plant_code:
             params["fcltyMngNo"] = plant_code
-        items = _items_from_response(_get(url, params, key))
+        body = _get(url, params, key)
+        if not body.strip():
+            # 2026-11-22 실측: 응답이 크면(6시간 × 300행 ≈ 80KB) 오류 없이 HTTP 200 · 빈 본문이 온다.
+            # 쪽 크기를 반으로 줄여 처음부터 다시 (쪽 번호가 쪽 크기에 묶여 있어서)
+            if rows <= 10:
+                raise RuntimeError("API 가 빈 응답만 준다 (쪽 크기 10 에서도)")
+            rows //= 2
+            out, page = [], 1
+            continue
+        items = _items_from_response(body)
         out += [_standard({API_FIELDS[k]: v for k, v in it.items() if k in API_FIELDS}, "api") for it in items]
         if len(items) < rows:
             return out

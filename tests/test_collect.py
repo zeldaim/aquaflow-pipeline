@@ -66,6 +66,15 @@ def test_paging(api, tmp_path, monkeypatch):
     assert s["fetched"] == 14 and len(fake_api.Handler.calls) == 3               # 5 + 5 + 4
 
 
+def test_empty_body_shrinks_page_size(api, tmp_path, monkeypatch):
+    """실제 API: 응답이 크면 HTTP 200 · 빈 본문. 쪽 크기를 반으로 줄여 다시 받는다."""
+    monkeypatch.setattr(fake_api.Handler, "empty_above", 20)
+    rows = ingest.fetch_api("2026-11-22", "2026-11-22", st_hour="04", ed_hour="10", rows=100)
+    assert len(rows) == 14
+    sizes = [int(c["numOfRows"]) for c in fake_api.Handler.calls]
+    assert sizes[:4] == [100, 50, 25, 12]                       # 100 · 50 · 25 는 빈 응답 → 12 로 받음
+
+
 def test_bad_key_fails_and_alerts_after_3(api, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("KWATER_API_KEY", "wrong")
     collect.loop(tmp_path, every_s=0, hours=1, max_runs=3)
