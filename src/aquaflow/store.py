@@ -27,8 +27,13 @@ def _table(rows: list[dict], schema: pa.Schema) -> pa.Table:
     return pa.table(cols, schema=schema)
 
 
+def _key(r: dict) -> tuple:
+    return (r.get("plant_code") or r.get("plant_name"), r["ts"])
+
+
 def write_orc(kept: list[dict], out_dir: str | Path) -> list[Path]:
-    """out_dir/curated/date=YYYY-MM-DD/part-0.orc — 같은 날짜 파일은 덮어쓴다 (다시 돌려도 중복 없음)."""
+    """out_dir/curated/date=YYYY-MM-DD/part-0.orc — 그 날짜 파일이 있으면 **합친다**.
+    같은 시설 · 시각은 새로 온 행이 이긴다 (API 가 값을 고쳐 보내는 경우). 그래서 매시간 겹쳐 받아도 중복이 없다."""
     by_day = defaultdict(list)
     for r in kept:
         by_day[r["ts"].date().isoformat()].append(r)
@@ -37,18 +42,28 @@ def write_orc(kept: list[dict], out_dir: str | Path) -> list[Path]:
         d = Path(out_dir) / "curated" / f"date={day}"
         d.mkdir(parents=True, exist_ok=True)
         p = d / "part-0.orc"
-        orc.write_table(_table(rows, SCHEMA), str(p))
+        merged = {}
+        if p.exists():
+            for old in orc.read_table(str(p)).to_pylist():
+                merged[_key(old)] = old
+        for r in rows:
+            merged[_key(r)] = r
+        out = sorted(merged.values(), key=lambda r: (_key(r)[0] or "", r["ts"]))
+        tmp = d / "part-0.orc.tmp"                          # 쓰다 죽어도 기존 파일이 깨지지 않게
+        orc.write_table(_table(out, SCHEMA), str(tmp))
+        tmp.replace(p)
         paths.append(p)
     return paths
 
 
-def write_rejected(rejected: list[dict], out_dir: str | Path) -> Path | None:
+def write_rejected(rejected: list[dict], out_dir: str | Path, append: bool = False) -> Path | None:
+    """격리 행 기록. 한 번 넣기(ingest)는 덮어쓰고, 자동 수집(collect)은 이어 쓴다."""
     if not rejected:
         return None
     d = Path(out_dir) / "quarantine"
     d.mkdir(parents=True, exist_ok=True)
     p = d / "rejected.jsonl"
-    with p.open("w", encoding="utf-8") as f:
+    with p.open("a" if append else "w", encoding="utf-8") as f:
         for r in rejected:
             f.write(json.dumps(r, ensure_ascii=False, default=str) + "\n")
     return p

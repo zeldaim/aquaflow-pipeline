@@ -20,3 +20,17 @@ services:
     volumes:
       - ./data:/app/data
     depends_on: [s3]
+
+  # 자동 수집 — 매시간 최근 6시간(앞 주기와 겹치게)을 Open API 로 받아 검증 · 합치기 · 업로드 · 알림
+  # docker compose --profile auto up -d collector   (KWATER_API_KEY 필요 · 멈출 때 docker compose --profile auto stop collector)
+  collector:
+    build: .
+    profiles: ["auto"]
+    command: ["collect", "--every", "3600", "--hours", "6", "--upload"]
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      S3_ENDPOINT: http://s3:4566
+    volumes:
+      - ./data:/app/data
+    depends_on: [s3]

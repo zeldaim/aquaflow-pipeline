@@ -25,14 +25,16 @@ from pathlib import Path
 
 # CSV 머리글 → 표준 이름. 실제 파일 머리글이 조금 달라도 받도록 후보를 여럿 둔다.
 # (data.go.kr 설명에 적힌 열: 구분, 발생일시, 시설명, 시설관리번호, 시설주소, pH, pH단위, 탁도, 잔류염소, 잔류염소단위, 데이터변경일자)
+# (실제 내려받은 파일 2026-11-22: 생활/공업 구분, 발생일시, 시설명, 시설관리번호, 시설주소, pH(-), 탁도(NTU), 잔류염소(mg/L), 데이터변경일자
+#  — 둘째 줄은 데이터가 아니라 기준치 줄: ",,,,,5.8~8.5,0.5이하,0.1~4.0,")
 CSV_ALIASES = {
     "ts": ["발생일시", "occrrncDt"],
     "plant_name": ["시설명", "시설관리명", "fcltyMngNm"],
     "plant_code": ["시설관리번호", "fcltyMngNo"],
-    "use_kind": ["구분", "용수구분명", "생활공업구분", "liIndDivName"],
-    "ph": ["pH", "PH", "ph", "phVal"],
-    "turbidity_ntu": ["탁도", "tbVal"],
-    "chlorine_mgl": ["잔류염소", "clVal"],
+    "use_kind": ["생활/공업 구분", "구분", "용수구분명", "생활공업구분", "liIndDivName"],
+    "ph": ["pH(-)", "pH", "PH", "ph", "phVal"],
+    "turbidity_ntu": ["탁도(NTU)", "탁도", "tbVal"],
+    "chlorine_mgl": ["잔류염소(mg/L)", "잔류염소", "clVal"],
 }
 REQUIRED = ["ts", "plant_name", "ph", "turbidity_ntu", "chlorine_mgl"]
 
@@ -111,8 +113,17 @@ def read_csv(path: str | Path) -> list[dict]:
     rows = []
     for r in reader:
         r = {k.strip(): v for k, v in r.items() if k}
+        if not (r.get(colmap["ts"]) or "").strip() and not (r.get(colmap["plant_name"]) or "").strip():
+            # 시각 · 시설이 둘 다 빈 줄 = 기준치 줄 ("5.8~8.5" 등) 이나 빈 줄 — 데이터가 아니라 건너뛴다 (격리 아님)
+            note = {std: r.get(colmap[std]) for std in ("ph", "turbidity_ntu", "chlorine_mgl")}
+            if any(v and v.strip() for v in note.values()):
+                read_csv.standards_row = note
+            continue
         rows.append(_standard({std: r.get(col) for std, col in colmap.items()}, f"csv:{path.name}"))
     return rows
+
+
+read_csv.standards_row = None   # 마지막으로 읽은 파일의 기준치 줄 (있으면) — main 이 보고서에 적는다
 
 
 def _items_from_response(body: bytes) -> list[dict]:
@@ -135,8 +146,12 @@ def _items_from_response(body: bytes) -> list[dict]:
     return [{child.tag: (child.text or "") for child in it} for it in root.iter("item")]
 
 
-def fetch_api(st_date: str, ed_date: str, plant_code: str | None = None, rows: int = 1000) -> list[dict]:
-    """시작 · 끝 날짜(YYYY-MM-DD) 사이 1시간 수질. 쪽(page)을 끝까지 돈다."""
+MAX_PAGES = 200                                             # API 가 pageNo 를 무시해도 끝없이 돌지 않게
+
+
+def fetch_api(st_date: str, ed_date: str, plant_code: str | None = None, rows: int = 1000,
+              st_hour: str = "00", ed_hour: str = "24") -> list[dict]:
+    """시작 · 끝 날짜(YYYY-MM-DD) · 시각(00~24) 사이 1시간 수질. 쪽(page)을 끝까지 돈다."""
     import requests
 
     key = os.environ.get("KWATER_API_KEY")
@@ -146,7 +161,7 @@ def fetch_api(st_date: str, ed_date: str, plant_code: str | None = None, rows: i
     url = os.environ.get("KWATER_QUALITY_URL", "https://apis.data.go.kr/B500001/rwis/waterQuality/list")
     out, page = [], 1
     while True:
-        params = {"serviceKey": key, "stDt": st_date, "stTm": "00", "edDt": ed_date, "edTm": "24",
+        params = {"serviceKey": key, "stDt": st_date, "stTm": st_hour, "edDt": ed_date, "edTm": ed_hour,
                   "numOfRows": rows, "pageNo": page, "_type": "json"}
         if plant_code:
             params["fcltyMngNo"] = plant_code
@@ -157,3 +172,11 @@ def fetch_api(st_date: str, ed_date: str, plant_code: str | None = None, rows: i
         if len(items) < rows:
             return out
         page += 1
+        if page > MAX_PAGES:
+            raise RuntimeError(f"쪽이 {MAX_PAGES} 을 넘음 — 기간을 줄이거나 API 가 pageNo 를 받는지 확인")
+
+
+def now_kst() -> datetime:
+    """K-water 시각은 한국 시간. 컨테이너 시계는 UTC 라 고정 +9시간으로 맞춘다 (tzdata 없이)."""
+    from datetime import timezone
+    return datetime.now(timezone(timedelta(hours=9))).replace(tzinfo=None)

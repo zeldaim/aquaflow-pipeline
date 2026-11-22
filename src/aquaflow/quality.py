@@ -20,11 +20,12 @@ PHYSICAL = {
     "chlorine_mgl": (0.0, 20.0),
 }
 
-# 기준 — 넘으면 표시 (확인 필요: 먹는물 수질기준 최신판)
+# 기준 — 벗어나면 표시. K-water 내려받은 파일(2026-11-22)의 기준치 줄과 같게: pH 5.8~8.5 · 탁도 0.5 이하 · 잔류염소 0.1~4.0
+# 잔류염소 하한(0.1)이 중요하다 — 너무 낮으면 소독이 안 된 물이 나간다는 뜻
 THRESHOLDS = {
     "ph": (5.8, 8.5),
     "turbidity_ntu": (None, 0.5),
-    "chlorine_mgl": (None, 4.0),
+    "chlorine_mgl": (0.1, 4.0),
 }
 
 # 한 시간 사이에 이보다 크게 바뀌면 표시 (정수장 출구 수질은 보통 천천히 변한다)
@@ -35,7 +36,9 @@ FUTURE_SLACK = timedelta(hours=2)
 
 def check(rows: list[dict], now: datetime | None = None) -> tuple[list[dict], list[dict], dict]:
     """(통과한 행 · 격리된 행 · 보고서). 통과한 행에는 flags(쉼표 문자열)가 붙는다."""
-    now = now or datetime.now()
+    if now is None:                                         # 데이터가 한국 시간이라 기준도 한국 시간 (컨테이너는 UTC)
+        from .ingest import now_kst
+        now = now_kst()
     kept, rejected = [], []
     seen = set()
     reasons = Counter()
@@ -70,8 +73,10 @@ def check(rows: list[dict], now: datetime | None = None) -> tuple[list[dict], li
             v = r[k]
             if v is None:
                 continue
-            if (lo is not None and v < lo) or (hi is not None and v > hi):
+            if hi is not None and v > hi:
                 flags.append(f"{k}_over_standard")
+            elif lo is not None and v < lo:
+                flags.append(f"{k}_under_standard")
         kept.append({**r, "flags": flags})
 
     # 시간당 급변 — 같은 시설의 이웃한 시각끼리 비교

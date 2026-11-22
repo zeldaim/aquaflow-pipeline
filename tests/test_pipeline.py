@@ -47,6 +47,21 @@ def test_read_csv_cp949(tmp_path):
     assert len(ingest.read_csv(p)) == 10
 
 
+def test_read_csv_real_export_format(tmp_path):
+    """실제 내려받은 파일과 같은 머리글 · 기준치 줄 (값은 합성). 기준치 줄은 건너뛰고, 잔류염소 0.05 는 하한 미달 표시."""
+    src = Path(__file__).parent / "fixtures" / "synthetic_export_format.csv"
+    p = tmp_path / "export_cp949.csv"
+    p.write_bytes(src.read_text(encoding="utf-8").encode("cp949"))     # 실제 파일처럼 CP949
+    rows = ingest.read_csv(p)
+    assert len(rows) == 3 and rows[0]["use_kind"] == "생활정수" and rows[0]["ph"] == 7.60
+    assert ingest.read_csv.standards_row == {"ph": "5.8~8.5", "turbidity_ntu": "0.5이하", "chlorine_mgl": "0.1~4.0"}
+    kept, rejected, report = quality.check(rows, now=datetime(2026, 11, 22, 12))   # 데이터가 22일 새벽이라 기준 시각도 22일
+    assert report["rejected_rows"] == 0
+    flags = {r["ts"].hour: r["flags"] for r in kept}
+    assert flags[2] == "chlorine_mgl_under_standard,chlorine_mgl_jump"   # 0.83 → 0.05 → 0.84
+    assert flags[3] == "chlorine_mgl_jump"
+
+
 def test_read_csv_missing_column(tmp_path):
     p = tmp_path / "bad.csv"
     p.write_text("시설명,pH\n가,7\n", encoding="utf-8")
