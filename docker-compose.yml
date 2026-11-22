@@ -1,0 +1,22 @@
+# docker compose up -d s3                                                 LocalStack S3 (로컬 AWS 흉내, 내 PC 에서만)
+# docker compose run --rm aquaflow ingest --csv data/raw/수질.csv --upload
+# docker compose run --rm aquaflow query
+# docker compose run --rm --entrypoint pytest aquaflow -q                 시험 (합성 데이터)
+#
+# 저장소는 S3 호환이면 무엇이든 된다 (LocalStack · MinIO · 실제 AWS) — .env 의 S3_ENDPOINT 만 바꾼다.
+# MinIO 는 2025년부터 커뮤니티 도커 이미지를 배포하지 않아 기본은 LocalStack.
+services:
+  s3:
+    image: localstack/localstack:4.0
+    ports: ["127.0.0.1:4566:4566"]
+    environment:
+      SERVICES: s3
+
+  aquaflow:
+    build: .
+    env_file: [.env]
+    environment:
+      S3_ENDPOINT: http://s3:4566
+    volumes:
+      - ./data:/app/data
+    depends_on: [s3]

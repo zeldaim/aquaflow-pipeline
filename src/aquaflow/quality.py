@@ -1,0 +1,101 @@
+"""품질 검증 — 저장하기 전에 행을 셋으로 나눈다.
+
+  rejected (격리)  물리적으로 불가능하거나 깨진 값 — 저장도 학습도 안 함.
+                   센서 조작 · 전송 오류 · 학습 데이터 오염(poisoning)을 막는 첫 관문.
+  flagged  (표시)  값은 가능하지만 기준을 넘음 — 저장은 하고 표시만 (실제 사건일 수 있으니 버리지 않음)
+  ok
+
+기준값은 THRESHOLDS 한 곳에 모았다. 수질 기준치(먹는물 수질기준 등)는 법령 최신판으로 확인하고 고친다 —
+여기 값은 연습용 출발점이다.
+"""
+from __future__ import annotations
+
+from collections import Counter
+from datetime import datetime, timedelta
+
+# 물리적으로 가능한 범위 — 밖이면 격리
+PHYSICAL = {
+    "ph": (0.0, 14.0),
+    "turbidity_ntu": (0.0, 1000.0),
+    "chlorine_mgl": (0.0, 20.0),
+}
+
+# 기준 — 넘으면 표시 (확인 필요: 먹는물 수질기준 최신판)
+THRESHOLDS = {
+    "ph": (5.8, 8.5),
+    "turbidity_ntu": (None, 0.5),
+    "chlorine_mgl": (None, 4.0),
+}
+
+# 한 시간 사이에 이보다 크게 바뀌면 표시 (정수장 출구 수질은 보통 천천히 변한다)
+MAX_HOURLY_JUMP = {"ph": 1.0, "turbidity_ntu": 0.3, "chlorine_mgl": 0.5}
+
+FUTURE_SLACK = timedelta(hours=2)
+
+
+def check(rows: list[dict], now: datetime | None = None) -> tuple[list[dict], list[dict], dict]:
+    """(통과한 행 · 격리된 행 · 보고서). 통과한 행에는 flags(쉼표 문자열)가 붙는다."""
+    now = now or datetime.now()
+    kept, rejected = [], []
+    seen = set()
+    reasons = Counter()
+    flags_count = Counter()
+
+    for r in rows:
+        why = []
+        if r["ts"] is None:
+            why.append("ts_unparsable")
+        elif r["ts"] > now + FUTURE_SLACK:
+            why.append("ts_future")
+        if not r["plant_name"]:
+            why.append("plant_missing")
+        values = [r[k] for k in PHYSICAL]
+        if all(v is None for v in values):
+            why.append("all_values_missing")
+        for k, (lo, hi) in PHYSICAL.items():
+            v = r[k]
+            if v is not None and not (lo <= v <= hi):
+                why.append(f"{k}_impossible")
+        key = (r["plant_code"] or r["plant_name"], r["ts"])
+        if not why and key in seen:
+            why.append("duplicate")
+        if why:
+            reasons.update(why)
+            rejected.append({**r, "reject_reasons": ",".join(why)})
+            continue
+        seen.add(key)
+
+        flags = []
+        for k, (lo, hi) in THRESHOLDS.items():
+            v = r[k]
+            if v is None:
+                continue
+            if (lo is not None and v < lo) or (hi is not None and v > hi):
+                flags.append(f"{k}_over_standard")
+        kept.append({**r, "flags": flags})
+
+    # 시간당 급변 — 같은 시설의 이웃한 시각끼리 비교
+    kept.sort(key=lambda r: (r["plant_code"] or r["plant_name"], r["ts"]))
+    prev = None
+    for r in kept:
+        same = prev is not None and (prev["plant_code"] or prev["plant_name"]) == (r["plant_code"] or r["plant_name"])
+        if same and r["ts"] - prev["ts"] == timedelta(hours=1):
+            for k, limit in MAX_HOURLY_JUMP.items():
+                if r[k] is not None and prev[k] is not None and abs(r[k] - prev[k]) > limit:
+                    r["flags"].append(f"{k}_jump")
+        prev = r
+    for r in kept:
+        flags_count.update(r["flags"])
+        r["flags"] = ",".join(r["flags"])
+
+    report = {
+        "input_rows": len(rows),
+        "kept_rows": len(kept),
+        "rejected_rows": len(rejected),
+        "reject_reasons": dict(reasons),
+        "flags": dict(flags_count),
+        "plants": len({r["plant_code"] or r["plant_name"] for r in kept}),
+        "ts_min": min((r["ts"] for r in kept), default=None),
+        "ts_max": max((r["ts"] for r in kept), default=None),
+    }
+    return kept, rejected, report

@@ -9,6 +9,8 @@ aws_credentials
 *.orc
 *.parquet
 data/raw/
+data/lake/
+!tests/fixtures/*.csv
 
 # 파이썬
 __pycache__/

@@ -1,0 +1,81 @@
+"""저장 — ORC 파일(날짜별 파티션) · 격리 파일 · 보고서, 그리고 선택적으로 S3 호환 저장소 업로드."""
+from __future__ import annotations
+
+import json
+import os
+from collections import defaultdict
+from pathlib import Path
+
+import pyarrow as pa
+import pyarrow.orc as orc
+
+SCHEMA = pa.schema([
+    ("ts", pa.timestamp("s")),
+    ("plant_name", pa.string()),
+    ("plant_code", pa.string()),
+    ("use_kind", pa.string()),
+    ("ph", pa.float64()),
+    ("turbidity_ntu", pa.float64()),
+    ("chlorine_mgl", pa.float64()),
+    ("source", pa.string()),
+    ("flags", pa.string()),
+])
+
+
+def _table(rows: list[dict], schema: pa.Schema) -> pa.Table:
+    cols = {f.name: [r.get(f.name) for r in rows] for f in schema}
+    return pa.table(cols, schema=schema)
+
+
+def write_orc(kept: list[dict], out_dir: str | Path) -> list[Path]:
+    """out_dir/curated/date=YYYY-MM-DD/part-0.orc — 같은 날짜 파일은 덮어쓴다 (다시 돌려도 중복 없음)."""
+    by_day = defaultdict(list)
+    for r in kept:
+        by_day[r["ts"].date().isoformat()].append(r)
+    paths = []
+    for day, rows in sorted(by_day.items()):
+        d = Path(out_dir) / "curated" / f"date={day}"
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / "part-0.orc"
+        orc.write_table(_table(rows, SCHEMA), str(p))
+        paths.append(p)
+    return paths
+
+
+def write_rejected(rejected: list[dict], out_dir: str | Path) -> Path | None:
+    if not rejected:
+        return None
+    d = Path(out_dir) / "quarantine"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / "rejected.jsonl"
+    with p.open("w", encoding="utf-8") as f:
+        for r in rejected:
+            f.write(json.dumps(r, ensure_ascii=False, default=str) + "\n")
+    return p
+
+
+def write_report(report: dict, out_dir: str | Path) -> Path:
+    p = Path(out_dir) / "quality_report.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    return p
+
+
+def upload_s3(paths: list[Path], out_dir: str | Path) -> list[str]:
+    """S3 호환 저장소에 경로 구조 그대로 올린다 — LocalStack · MinIO · 실제 AWS S3 모두 같은 코드.
+    S3_ENDPOINT (없으면 실제 AWS) · AWS_ACCESS_KEY_ID · AWS_SECRET_ACCESS_KEY · AWS_DEFAULT_REGION · S3_BUCKET (.env)"""
+    import boto3
+
+    s3 = boto3.client("s3", endpoint_url=os.environ.get("S3_ENDPOINT") or None)
+    bucket = os.environ.get("S3_BUCKET", "kwater")
+    existing = {b["Name"] for b in s3.list_buckets().get("Buckets", [])}
+    if bucket not in existing:
+        region = os.environ.get("AWS_DEFAULT_REGION", "ap-northeast-2")
+        s3.create_bucket(Bucket=bucket, CreateBucketConfiguration={"LocationConstraint": region})
+    base = Path(out_dir)
+    keys = []
+    for p in paths:
+        key = p.relative_to(base).as_posix()
+        s3.upload_file(str(p), bucket, key, ExtraArgs={"ServerSideEncryption": "AES256"})   # 저장 시 암호화
+        keys.append(key)
+    return keys
